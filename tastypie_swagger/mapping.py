@@ -1,8 +1,14 @@
 # coding=utf-8
+import sys
+import json
 import datetime
 
+from django.conf import settings
 from django.db.models.sql.constants import QUERY_TERMS
 from django.utils.encoding import force_unicode
+from django.core.exceptions import ImproperlyConfigured
+from tastypie.api import Api
+
 from tastypie import fields
 
 from .utils import trailing_slash_or_none, urljoin_forced
@@ -94,7 +100,8 @@ class ResourceSwaggerMapping(object):
                 'Resource %(resource)s has neither get_resource_list_uri nor get_resource_uri' % {
                     'resource': self.resource})
 
-    def build_parameter(self, in_=None, name='', required=True, description=''):
+    def build_parameter(self, in_=None, name='', required=True,
+                        description=''):
         if not in_:
             in_ = 'query'
             description = ''.join([description, u'[注意：参数的位置是自动生成的，可能不准确。]'])
@@ -395,11 +402,6 @@ class ResourceSwaggerMapping(object):
             endpoint: operations
         }
 
-    # for Swagger-UI 3.17.0
-    def build_new_model(self):
-        _model = {}
-        return _model
-
     def build_list_path(self):
         endpoint = self.get_resource_base_uri()
         operations = {}
@@ -596,3 +598,70 @@ class ResourceSwaggerMapping(object):
             )
         )
         return models
+
+
+def build_tastypie_api_list():
+    tastypie_api_list = []
+    tastypie_api_module_list = getattr(settings,
+                                       'TASTYPIE_SWAGGER_API_MODULE_LIST',
+                                       None)
+    if not tastypie_api_module_list:
+        raise ImproperlyConfigured(
+            "Must define TASTYPIE_SWAGGER_API_MODULE in settings as path to a tastypie.api.Api instance")
+    for tastypie_api_module in tastypie_api_module_list:
+        path = tastypie_api_module['path']
+        obj = tastypie_api_module['obj']
+        func_name = tastypie_api_module['func_name']
+        try:
+            tastypie_api = getattr(sys.modules[path], obj, None)
+            if func_name:
+                tastypie_api = getattr(tastypie_api, func_name)()
+        except KeyError:
+            raise ImproperlyConfigured("%s is not a valid python path" % path)
+        if not isinstance(tastypie_api, Api):
+            raise ImproperlyConfigured(
+                "%s is not a valid tastypie.api.Api instance" % tastypie_api_module)
+        tastypie_api_list.append(tastypie_api)
+    return tastypie_api_list
+
+
+def build_openapi_paths(tastypie_api_list):
+    paths = {}
+    for tastypie_api in tastypie_api_list:
+        for name in sorted(tastypie_api._registry):
+            mapping = ResourceSwaggerMapping(
+                tastypie_api._registry.get(name))
+            # 一个 resource 可能有多个 URL
+            doc = mapping.resource.__doc__
+            if doc:
+                try:
+                    paths.update(json.loads(doc))
+                except ValueError:
+                    paths.update(mapping.build_paths())
+            else:
+                paths.update(mapping.build_paths())
+    return paths
+
+
+def build_openapi_spec(server_url="http://127.0.0.1:8000"):
+    open_api_spec = {
+        'openapi': '3.0.1',
+        'info': {
+            'version': '1.0.0',
+            "description": "ifanr 后端所有的 API",
+            'title': 'ifanr API Center',
+            'license': {
+                'name': 'Private'
+            }
+        },
+        'servers': [
+            {
+                'url': server_url
+            }
+        ],
+    }
+    tastypie_api_list = build_tastypie_api_list()
+    open_api_spec.update({
+        'paths': build_openapi_paths(tastypie_api_list),
+    })
+    return open_api_spec
