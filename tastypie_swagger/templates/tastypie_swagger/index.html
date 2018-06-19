@@ -44,7 +44,9 @@
       const ui = SwaggerUIBundle({
         url: "",
         dom_id: '#swagger-ui',
-        json_spec: JSON.stringify(json_spec),
+        spec: json_spec,
+        filter: true,
+        docExpansion: 'none', 
         presets: [
           SwaggerUIBundle.presets.apis,
           SwaggerUIStandalonePreset
