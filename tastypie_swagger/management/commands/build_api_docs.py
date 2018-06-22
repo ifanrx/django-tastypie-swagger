@@ -1,12 +1,12 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
-import os
 import json
+import os
 import shutil
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.template.loader import render_to_string
-from django.conf import settings
 
 import tastypie_swagger
 

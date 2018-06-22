@@ -1,15 +1,14 @@
 # coding=utf-8
-import sys
-import json
 import datetime
+import json
+import sys
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models.sql.constants import QUERY_TERMS
 from django.utils.encoding import force_unicode
-from django.core.exceptions import ImproperlyConfigured
-from tastypie.api import Api
-
 from tastypie import fields
+from tastypie.api import Api
 
 from .utils import trailing_slash_or_none, urljoin_forced
 
