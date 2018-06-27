@@ -56,7 +56,7 @@ Each item is a dict.
 - obj: It should be an Api instance or an instance who have a function to get an Api instance
 - func_name: if isinstance(obj, Api) is True, func_name should be ''
 
-配置打包过程中需要忽略的文件, 将 API 文档编译为静态文件时，会将 django-tastypie_swagger 的静态文件夹下的所有内容拷贝到目的文件夹，如果有不希望被拷贝的文件，比如 .DS_Store 文件，可以在这里指定。也可以不配置::
+配置打包过程中需要忽略的文件, 将 API 文档编译为静态文件时，会将 django-tastypie_swagger 的静态文件夹下的所有内容拷贝到目的文件夹，如果有不希望被拷贝的文件，比如 .DS_Store 文件，可以在这里指定。可选::
 
     TASTYPIE_SWAGGER_IGNORE_PATTERN_LIST = ['.DS_Store']
 
