@@ -82,7 +82,7 @@ Each item is a dict.
       "version": "1.0.1"
     }
 
-配置 index.html 文件的 title。可选，默认为 'Swagger UI'::
+配置 index.html 文件的 title。可选，默认为 'Swagger UI'::
 
     TASTYPIE_SWAGGER_INDEX_TITLE = ''
 
