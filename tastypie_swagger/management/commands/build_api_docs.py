@@ -19,6 +19,8 @@ class Command(BaseCommand):
     def _compile_index(self):
         self.stdout.write('Compiling index.html, please wait patiently.')
         context = {
+            'index_title': getattr(settings, 'TASTYPIE_SWAGGER_INDEX_TITLE',
+                              'Swagger UI'),
             'STATIC_URL': './',
             'json_spec': json.dumps(
                 tastypie_swagger.mapping.build_openapi_spec()),
