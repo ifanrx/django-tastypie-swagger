@@ -13,9 +13,7 @@ import tastypie_swagger
 
 class Command(BaseCommand):
     help = 'Collect swagger-ui static file and compile index.html.'
-
-    socialbase_docs_dir = os.path.join(settings.BASE_DIR, 'docs')
-    dest_dir = os.path.join(socialbase_docs_dir, 'swagger_api_docs')
+    dest_dir = getattr(settings, 'TASTYPIE_SWAGGER_DOCS_DIR')
     swagger_static_dir = os.path.join(tastypie_swagger.__path__[0], 'static')
 
     def _compile_index(self):
@@ -34,7 +32,13 @@ class Command(BaseCommand):
             f.write(self._compile_index())
 
     def _copy_static_file(self):
-        ignore_pattern = shutil.ignore_patterns('.DS_Store')
+        ignore_pattern_list = getattr(settings,
+                                      'TASTYPIE_SWAGGER_IGNORE_PATTERN_LIST',
+                                      None)
+        if ignore_pattern_list:
+            ignore_pattern = shutil.ignore_patterns(*ignore_pattern_list)
+        else:
+            ignore_pattern = None
         self.stdout.write('Copy static files to {}.'.format(self.dest_dir))
         shutil.copytree(self.swagger_static_dir, self.dest_dir,
                         ignore=ignore_pattern)

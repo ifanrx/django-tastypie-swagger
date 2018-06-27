@@ -23,12 +23,12 @@ ALL_WITH_RELATIONS = 2
 
 class ResourceSwaggerMapping(object):
     """
-    Represents a mapping of a tastypie resource to a swagger API declaration
+    Represents a mapping of a tastypie resource to OpenAPI-Specification
 
     Tries to use tastypie.resources.Resource.build_schema
 
     http://django-tastypie.readthedocs.org/en/latest/resources.html
-    https://github.com/wordnik/swagger-core/wiki/API-Declaration
+    https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.1.md
     """
     WRITE_ACTION_IGNORED_FIELDS = ['id', 'resource_uri', ]
 
@@ -642,17 +642,20 @@ def build_openapi_paths(tastypie_api_list):
     return paths
 
 
-def build_openapi_spec(server_url="http://127.0.0.1:8000"):
+def build_openapi_spec(server_url=None):
+    try:
+        info = getattr(settings, 'TASTYPIE_SWAGGER_OPEN_API_INFO')
+    except KeyError:
+        raise ImproperlyConfigured('')
+    if not server_url:
+        try:
+            server_url = getattr(settings, 'TASTYPIE_SWAGGER_SERVER_URL')
+        except KeyError:
+            raise ImproperlyConfigured('')
+
     open_api_spec = {
         'openapi': '3.0.1',
-        'info': {
-            'version': '1.0.0',
-            "description": "ifanr 后端所有的 API",
-            'title': 'ifanr API Center',
-            'license': {
-                'name': 'Private'
-            }
-        },
+        'info': info,
         'servers': [
             {
                 'url': server_url
