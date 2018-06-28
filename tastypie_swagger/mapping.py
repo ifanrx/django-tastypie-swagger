@@ -1,12 +1,24 @@
 # coding=utf-8
 import datetime
+import json
+import logging
+import sys
 
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models.sql.constants import QUERY_TERMS
-from django.utils.encoding import force_unicode
+
+try:
+    from django.utils.encoding import force_text
+except ImportError:
+    from django.utils.encoding import force_unicode as force_text
+
 from tastypie import fields
+from tastypie.api import Api
 
 from .utils import trailing_slash_or_none, urljoin_forced
 
+logger = logging.getLogger(__name__)
 # Ignored POST fields
 IGNORED_FIELDS = ['id', ]
 
@@ -18,15 +30,14 @@ ALL_WITH_RELATIONS = 2
 
 class ResourceSwaggerMapping(object):
     """
-    Represents a mapping of a tastypie resource to a swagger API declaration
+    Represents a mapping of a tastypie resource to OpenAPI-Specification
 
     Tries to use tastypie.resources.Resource.build_schema
 
     http://django-tastypie.readthedocs.org/en/latest/resources.html
-    https://github.com/wordnik/swagger-core/wiki/API-Declaration
+    https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.1.md
     """
     WRITE_ACTION_IGNORED_FIELDS = ['id', 'resource_uri', ]
-
     # Default summary strings for operations
     OPERATION_SUMMARIES = {
         'get-detail': "Retrieve a single %s by ID",
@@ -39,32 +50,62 @@ class ResourceSwaggerMapping(object):
     def __init__(self, resource):
         self.resource = resource
         self.resource_name = self.resource._meta.resource_name
+        self.resource_pk_type = self.get_pk_type()
         self.schema = self.resource.build_schema()
         self.fake_operation = {
             'get': {
-                'description': u'信息无法获取',
+                'description': 'Unable to get relevant information',
                 'tags': [
                     self.resource.__module__.split('.')[0],
                     self.resource.api_name
                 ],
                 "responses": {
                     'default': {
-                        'description': u'自动生成',
+                        'description': 'Unable to get relevant information',
                     },
                 },
             }
         }
 
+    def _get_native_field_type(self, field):
+        if not field:
+            logger.warning(
+                'No id field found for resource:{0}'.format(self.resource))
+            return 'undefined'
+        elif getattr(field, 'is_related', False) and field.is_related:
+            if getattr(field, 'is_m2m', False) and field.is_m2m:
+                return 'list'
+            else:
+                related_id_field = field.to_class.base_fields.get('id')
+                if related_id_field:
+                    return related_id_field.dehydrated_type
+        else:
+            return field.dehydrated_type
+
+    def get_pk_type(self):
+        return self._get_native_field_type(
+            getattr(self.resource, 'id', self.resource.fields.get('id', None)))
+
     def get_resource_verbose_name(self, plural=False):
+        """Retrieve the verbose name for the resource from the queryset model.
+
+        If the resource is not a ModelResource, use either
+        ``resource_name`` or ``resource_name_plural``.
+        """
         qs = self.resource._meta.queryset
         if qs is not None and hasattr(qs, 'model'):
             meta = qs.model._meta
             try:
-                verbose_name = plural and meta.verbose_name_plural or meta.verbose_name
+                verbose_name = meta.verbose_name_plural if plural else meta.verbose_name
                 return verbose_name.lower()
             except AttributeError:
                 pass
         return self.resource_name
+
+    def get_related_field_type(self, related_field_name):
+        for field_name, field in self.resource.base_fields.items():
+            if related_field_name == field_name:
+                return self._get_native_field_type(field)
 
     def get_operation_summary(self, detail=True, method='get'):
         """
@@ -94,10 +135,12 @@ class ResourceSwaggerMapping(object):
                 'Resource %(resource)s has neither get_resource_list_uri nor get_resource_uri' % {
                     'resource': self.resource})
 
-    def build_parameter(self, in_=None, name='', required=True, description=''):
+    def build_parameter(self, in_=None, name='', required=True,
+                        description=''):
         if not in_:
             in_ = 'query'
-            description = ''.join([description, u'[注意：参数的位置是自动生成的，可能不准确。]'])
+            description = ''.join([description, '[Note: The position of the parameter is automatically generated and may not be accurate.]'])
+
         parameter = {
             'in': in_,
             'name': name,
@@ -106,7 +149,8 @@ class ResourceSwaggerMapping(object):
             'schema': {}
         }
 
-        # TODO make use of this to Implement the allowable_values of swagger (https://github.com/wordnik/swagger-core/wiki/Datatypes) at the field level.
+        # TODO make use of this to Implement the allowable_values of swagger
+        # (https://github.com/wordnik/swagger-core/wiki/Datatypes) at the field level.
         # This could be added to the meta value of the resource to specify enum-like or range data on a field.
         #        if allowed_values:
         #            parameter.update({'allowableValues': allowed_values})
@@ -119,8 +163,8 @@ class ResourceSwaggerMapping(object):
             if not field['readonly'] and not name in IGNORED_FIELDS:
                 parameters.append(self.build_parameter(
                     name=name,
-                    required=not field['blank'],
-                    description=force_unicode(field['help_text']),
+                    required=field['nullable'],
+                    description=force_text(field['help_text']),
                 ))
         return parameters
 
@@ -140,6 +184,7 @@ class ResourceSwaggerMapping(object):
             'in': "query",
             'name': "order_by",
             'required': False,
+            'schema': {},
             'description': unicode(
                 "Orders the result set based on the selection. Ascending order by default, prepending the '-' sign change the sorting order to descending"),
         }
@@ -156,12 +201,12 @@ class ResourceSwaggerMapping(object):
                 ('offset', 'int',
                  'Specify the offset to start displaying element on a page.'),
             ]
-            for name, type, desc in navigation_filters:
+            for name, type_, desc in navigation_filters:
                 parameters.append(self.build_parameter(
                     in_="query",
                     name=name,
                     required=False,
-                    description=force_unicode(desc),
+                    description=force_text(desc),
                 ))
         if 'filtering' in self.schema and method.upper() == 'GET':
             for name, field in self.schema['filtering'].items():
@@ -189,29 +234,29 @@ class ResourceSwaggerMapping(object):
                                 field = QUERY_TERMS
 
                     elif field == ALL_WITH_RELATIONS:  # Show all params from related model
-                        # Add a subset of filter only foreign-key compatible on the relation itself.
-                        # We assume foreign keys are only int based.
-                        field = ['gt', 'in', 'gte', 'lt', 'lte',
-                                 'exact']  # TODO This could be extended by checking the actual type of the relational field, but afaik it's also an issue on tastypie.
-                        try:
-                            related_resource = self.resource.fields[
-                                name].get_related_resource(None)
-                            related_mapping = ResourceSwaggerMapping(
-                                related_resource)
-                            parameters.extend(
-                                related_mapping.build_parameters_from_filters(
-                                    prefix="%s%s__" % (prefix, name)))
-                        except (KeyError, AttributeError):
-                            pass
+                            # Add a subset of filter only foreign-key compatible on the relation itself.
+                            # We assume foreign keys are only int based.
+                            field = ['gt', 'in', 'gte', 'lt', 'lte',
+                                     'exact']  # TODO This could be extended by checking the actual type of the relational field, but afaik it's also an issue on tastypie.
+                            try:
+                                related_resource = self.resource.fields[
+                                    name].get_related_resource(None)
+                                related_mapping = ResourceSwaggerMapping(
+                                    related_resource)
+                                parameters.extend(
+                                    related_mapping.build_parameters_from_filters(
+                                        prefix="%s%s__" % (prefix, name)))
+                            except (KeyError, AttributeError):
+                                pass
 
-                if isinstance(field, list):
+                if isinstance(field, (list, tuple, set)):
                     # Skip if this is an incorrect filter
                     if name not in self.schema['fields']: continue
 
                     schema_field = self.schema['fields'][name]
                     for query in field:
                         if query == 'exact':
-                            description = force_unicode(
+                            description = force_text(
                                 schema_field['help_text'])
                             dataType = schema_field['type']
                             # Use a better description for related models with exact filter
@@ -231,7 +276,7 @@ class ResourceSwaggerMapping(object):
                                 in_="query",
                                 name="%s%s__%s" % (prefix, name, query),
                                 required=False,
-                                description=force_unicode(
+                                description=force_text(
                                     schema_field['help_text']),
                             ))
 
@@ -261,7 +306,7 @@ class ResourceSwaggerMapping(object):
                 in_="query",
                 name=name,
                 required=field.get("required", True),
-                description=force_unicode(field.get("description", "")),
+                description=force_text(field.get("description", "")),
             ))
 
         # For non-standard API functionality, allow the User to declaritively
@@ -280,19 +325,6 @@ class ResourceSwaggerMapping(object):
         return parameters
 
     def build_detail_operation(self, method='get'):
-        operation = {
-            'summary': self.get_operation_summary(detail=True, method=method),
-            'httpMethod': method.upper(),
-            'parameters': [
-                self.build_parameter(in_='path', name=self._detail_uri_name(),
-                                     description='ID of resource')],
-            'responseClass': self.resource_name,
-            'nickname': '%s-detail' % self.resource_name,
-            'notes': self.resource.__doc__,
-        }
-        return operation
-
-    def build_new_detail_operation(self, method='get'):
         return {
             'summary': self.get_operation_summary(detail=False, method=method),
             'tags': [
@@ -304,7 +336,7 @@ class ResourceSwaggerMapping(object):
                                      description='ID of resource')],
             'responses': {
                 'default': {
-                    'description': u'自动生成',
+                    'description': 'Unable to get relevant information',
                 },
             }
 
@@ -313,16 +345,6 @@ class ResourceSwaggerMapping(object):
     def build_list_operation(self, method='get'):
         return {
             'summary': self.get_operation_summary(detail=False, method=method),
-            'httpMethod': method.upper(),
-            'parameters': self.build_parameters_for_list(method=method),
-            'responseClass': 'ListView' if method.upper() == 'GET' else self.resource_name,
-            'nickname': '%s-list' % self.resource_name,
-            'notes': self.resource.__doc__,
-        }
-
-    def build_new_list_operation(self, method='get'):
-        return {
-            'summary': self.get_operation_summary(detail=False, method=method),
             'tags': [
                 self.resource.__module__.split('.')[0],
                 self.resource.api_name
@@ -330,28 +352,13 @@ class ResourceSwaggerMapping(object):
             'parameters': self.build_parameters_for_list(method=method),
             'responses': {
                 'default': {
-                    'description': u'自动生成',
+                    'description': 'Unable to get relevant information',
                 },
             }
 
         }
 
     def build_extra_operation(self, extra_action):
-        if "name" not in extra_action:
-            raise LookupError("\"name\" is a required field in extra_actions.")
-        return {
-            'summary': extra_action.get("summary", ""),
-            'httpMethod': extra_action.get('http_method', "get").upper(),
-            'parameters': self.build_parameters_from_extra_action(
-                method=extra_action.get('http_method'),
-                fields=extra_action.get('fields'),
-                resource_type=extra_action.get("resource_type", "view")),
-            'responseClass': 'Object',
-            # TODO this should be extended to allow the creation of a custom object.
-            'nickname': extra_action['name'],
-        }
-
-    def build_new_extra_operation(self, extra_action):
         return {
             'summary': extra_action.get("summary", ""),
             'tags': [
@@ -364,7 +371,7 @@ class ResourceSwaggerMapping(object):
                 resource_type=extra_action.get("resource_type", "view")),
             'responses': {
                 'default': {
-                    'description': u'自动生成',
+                    'description': 'Unable to get relevant information',
                 },
             }
 
@@ -376,18 +383,18 @@ class ResourceSwaggerMapping(object):
         operations = {}
         if 'get' in self.schema['allowed_detail_http_methods']:
             operations.update(
-                {'get': self.build_new_detail_operation(method='get')}
+                {'get': self.build_detail_operation(method='get')}
             )
         if 'put' in self.schema['allowed_detail_http_methods']:
             operations.update(
-                {'put': self.build_new_detail_operation(method='put')}
+                {'put': self.build_detail_operation(method='put')}
             )
             operations['put']['parameters'].append(
                 self.build_parameter_for_object(method='put')
             )
         if 'delete' in self.schema['allowed_detail_http_methods']:
             operations.update(
-                {'delete': self.build_new_detail_operation(method='delete')}
+                {'delete': self.build_detail_operation(method='delete')}
             )
         if not operations:
             operations = self.fake_operation
@@ -395,22 +402,17 @@ class ResourceSwaggerMapping(object):
             endpoint: operations
         }
 
-    # for Swagger-UI 3.17.0
-    def build_new_model(self):
-        _model = {}
-        return _model
-
     def build_list_path(self):
         endpoint = self.get_resource_base_uri()
         operations = {}
         if 'get' in self.schema['allowed_list_http_methods']:
             operations.update({
-                'get': self.build_new_list_operation(method='get')
+                'get': self.build_list_operation(method='get')
             })
 
         if 'post' in self.schema['allowed_list_http_methods']:
             operations.update({
-                'post': self.build_new_list_operation(method='post')
+                'post': self.build_list_operation(method='post')
             })
             operations['post']['parameters'].append(
                 self.build_parameter_for_object(method='post')
@@ -432,27 +434,28 @@ class ResourceSwaggerMapping(object):
                         self.get_resource_base_uri(), identifier,
                         extra_action.get('name'))
                 extra_paths.update({
-                    endpoint: self.build_new_extra_operation(extra_action)})
+                    endpoint: self.build_extra_operation(extra_action)})
         return extra_paths
 
     # for Swagger-UI 3.17.0
     def build_paths(self):
-        # 一个 reource 可能有多个 path， 一个 path 可能有多个 operation
+        # 一个 resource 可能有多个 path， 一个 path 可能有多个 operation
         paths = {}
         paths.update(self.build_detail_path())
         paths.update(self.build_list_path())
         paths.update(self.build_extra_paths())
         return paths
 
-    def build_property(self, name, type, description=""):
+    def build_property(self, name, type_, description="", required=False):
         prop = {
             name: {
-                'type': type,
+                'type': type_,
                 'description': description,
+                'required': required
             }
         }
 
-        if type == 'List':
+        if type_ == 'List':
             prop[name]['items'] = {'$ref': name}
 
         return prop
@@ -460,7 +463,10 @@ class ResourceSwaggerMapping(object):
     def build_properties_from_fields(self, method='get'):
         properties = {}
 
+        excludes = getattr(self.resource._meta, 'excludes', [])
         for name, field in self.schema['fields'].items():
+            if name in excludes:
+                continue
             # Exclude fields from custom put / post object definition
             if method in ['post', 'put']:
                 if name in self.WRITE_ACTION_IGNORED_FIELDS:
@@ -474,20 +480,18 @@ class ResourceSwaggerMapping(object):
                 field['default'] = field.get('default').isoformat()
 
             properties.update(self.build_property(
-                name,
-                field.get('type'),
-                # note: 'help_text' is a Django proxy which must be wrapped
-                # in unicode *specifically* to get the actual help text.
-                force_unicode(field.get('help_text', '')),
-            )
+                    name,
+                    field.get('type'),
+                    force_text(field.get('help_text',''))
+                )
             )
         return properties
 
-    def build_model(self, resource_name, id, properties):
+    def build_model(self, resource_name, id_, properties):
         return {
             resource_name: {
                 'properties': properties,
-                'id': id
+                'id': id_
             }
         }
 
@@ -518,50 +522,29 @@ class ResourceSwaggerMapping(object):
         )
 
         models.update(
-            self.build_model(
-                'Meta',
-                'Meta',
-                meta_properties
-            )
+            self.build_model('Meta', 'Meta', meta_properties)
         )
 
         objects_properties = {}
         objects_properties.update(
-            self.build_property(
-                self.resource_name,
-                "List")
+            self.build_property(self.resource_name, "List")
         )
         # Build the Objects class added by tastypie in the list view.
         models.update(
-            self.build_model(
-                'Objects',
-                'Objects',
-                objects_properties
-            )
+            self.build_model('Objects', 'Objects', objects_properties)
         )
         # Build the actual List class
         list_properties = {}
-        list_properties.update(self.build_property(
-            'meta',
-            'Meta'
-        ))
+        list_properties.update(self.build_property('meta', 'Meta'))
 
-        list_properties.update(self.build_property(
-            'objects',
-            'Objects'
-        ))
+        list_properties.update(self.build_property('objects', 'Objects'))
         models.update(
-            self.build_model(
-                'ListView',
-                'ListView',
-                list_properties
-            )
+            self.build_model('ListView', 'ListView', list_properties)
         )
 
         return models
 
     def build_models(self):
-        # TODO this should be extended to allow the creation of a custom objects for extra_actions.
         models = {}
 
         # Take care of the list particular schema with meta and so on.
@@ -572,27 +555,97 @@ class ResourceSwaggerMapping(object):
             models.update(
                 self.build_model(
                     resource_name='%s_post' % self.resource._meta.resource_name,
+                    id_='%s_post' % self.resource_name,
                     properties=self.build_properties_from_fields(
-                        method='post'),
-                    id='%s_post' % self.resource_name
-                )
+                        method='post'))
             )
 
         if 'put' in self.resource._meta.detail_allowed_methods:
             models.update(
                 self.build_model(
                     resource_name='%s_put' % self.resource._meta.resource_name,
-                    properties=self.build_properties_from_fields(method='put'),
-                    id='%s_put' % self.resource_name
-                )
+                    id_='%s_put' % self.resource_name,
+                    properties=self.build_properties_from_fields(method='put'))
             )
 
         # Actually add the related model
         models.update(
-            self.build_model(
-                resource_name=self.resource._meta.resource_name,
-                properties=self.build_properties_from_fields(),
-                id=self.resource_name
-            )
+            self.build_model(resource_name=self.resource._meta.resource_name,
+                             id_=self.resource_name,
+                             properties=self.build_properties_from_fields())
         )
+
+        if hasattr(self.resource._meta, 'extra_actions'):
+            for extra_action in self.resource._meta.extra_actions:
+                if "model" in extra_action:
+                    models.update(
+                        self.build_model(
+                            resource_name=extra_action['model']['id'],
+                            id_=extra_action['model']['id'],
+                            properties=extra_action['model']['properties'])
+                    )
         return models
+
+
+def build_tastypie_api_list():
+    tastypie_api_list = []
+    tastypie_api_module_list = getattr(settings,
+                                       'TASTYPIE_SWAGGER_API_MODULE_LIST',
+                                       None)
+    if not tastypie_api_module_list:
+        raise ImproperlyConfigured(
+            "Must define TASTYPIE_SWAGGER_API_MODULE in settings as path to a tastypie.api.Api instance")
+    for tastypie_api_module in tastypie_api_module_list:
+        path = tastypie_api_module['path']
+        obj = tastypie_api_module['obj']
+        func_name = tastypie_api_module['func_name']
+        try:
+            tastypie_api = getattr(sys.modules[path], obj, None)
+            if func_name:
+                tastypie_api = getattr(tastypie_api, func_name)()
+        except KeyError:
+            raise ImproperlyConfigured("%s is not a valid python path" % path)
+        if not isinstance(tastypie_api, Api):
+            raise ImproperlyConfigured(
+                "%s is not a valid tastypie.api.Api instance" % tastypie_api_module)
+        tastypie_api_list.append(tastypie_api)
+    return tastypie_api_list
+
+
+def build_openapi_paths(tastypie_api_list):
+    paths = {}
+    for tastypie_api in tastypie_api_list:
+        for name in sorted(tastypie_api._registry):
+            mapping = ResourceSwaggerMapping(
+                tastypie_api._registry.get(name))
+            # 一个 resource 可能有多个 URL
+            doc = mapping.resource.__doc__
+            if doc:
+                try:
+                    paths.update(json.loads(doc))
+                except ValueError:
+                    paths.update(mapping.build_paths())
+            else:
+                paths.update(mapping.build_paths())
+    return paths
+
+
+def build_openapi_spec(server_url=None):
+    info = getattr(settings, 'TASTYPIE_SWAGGER_OPEN_API_INFO')
+    if not server_url:
+        server_url = getattr(settings, 'TASTYPIE_SWAGGER_SERVER_URL')
+
+    open_api_spec = {
+        'openapi': '3.0.1',
+        'info': info,
+        'servers': [
+            {
+                'url': server_url
+            }
+        ],
+    }
+    tastypie_api_list = build_tastypie_api_list()
+    open_api_spec.update({
+        'paths': build_openapi_paths(tastypie_api_list),
+    })
+    return open_api_spec

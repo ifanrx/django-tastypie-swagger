@@ -1,5 +1,6 @@
 recursive-include tastypie_swagger/static *
 recursive-include tastypie_swagger/templates *
+recursive-exclude * .DS_Store
 include LICENSE
 include README.rst
 include 3RDPARTYLICENSES
