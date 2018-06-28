@@ -13,7 +13,7 @@ Installing for Production
 
 .. code-block::
 
-   pip install django-tsatypie-swagger-ng
+   pip install django-tastypie-swagger-ng
 
 Installing for Development
 ==========================
