@@ -54,14 +54,14 @@ class ResourceSwaggerMapping(object):
         self.schema = self.resource.build_schema()
         self.fake_operation = {
             'get': {
-                'description': u'信息无法获取',
+                'description': 'Unable to get relevant information',
                 'tags': [
                     self.resource.__module__.split('.')[0],
                     self.resource.api_name
                 ],
                 "responses": {
                     'default': {
-                        'description': u'自动生成',
+                        'description': 'Unable to get relevant information',
                     },
                 },
             }
@@ -139,7 +139,7 @@ class ResourceSwaggerMapping(object):
                         description=''):
         if not in_:
             in_ = 'query'
-            description = ''.join([description, u'[注意：参数的位置是自动生成的，可能不准确。]'])
+            description = ''.join([description, '[Note: The position of the parameter is automatically generated and may not be accurate.]'])
 
         parameter = {
             'in': in_,
@@ -336,7 +336,7 @@ class ResourceSwaggerMapping(object):
                                      description='ID of resource')],
             'responses': {
                 'default': {
-                    'description': u'自动生成',
+                    'description': 'Unable to get relevant information',
                 },
             }
 
@@ -352,7 +352,7 @@ class ResourceSwaggerMapping(object):
             'parameters': self.build_parameters_for_list(method=method),
             'responses': {
                 'default': {
-                    'description': u'自动生成',
+                    'description': 'Unable to get relevant information',
                 },
             }
 
@@ -371,7 +371,7 @@ class ResourceSwaggerMapping(object):
                 resource_type=extra_action.get("resource_type", "view")),
             'responses': {
                 'default': {
-                    'description': u'自动生成',
+                    'description': 'Unable to get relevant information',
                 },
             }
 
