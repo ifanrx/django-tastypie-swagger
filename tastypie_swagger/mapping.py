@@ -38,7 +38,6 @@ class ResourceSwaggerMapping(object):
     https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.1.md
     """
     WRITE_ACTION_IGNORED_FIELDS = ['id', 'resource_uri', ]
-
     # Default summary strings for operations
     OPERATION_SUMMARIES = {
         'get-detail': "Retrieve a single %s by ID",
